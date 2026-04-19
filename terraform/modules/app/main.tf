@@ -1,9 +1,6 @@
 locals {
-  # Shared infra prefix (VPC, ALB, shared SGs)
-  name = "${var.project_name}-${var.environment}"
-
-  # Per-app prefix (target group, ASG, EC2 SG, IAM role) — keeps resources unique
-  # when multiple apps share the same project/environment.
+  # Per-app prefix — keeps resources unique when multiple apps share the same
+  # project/environment.
   app_prefix = "${var.project_name}-${var.environment}-${var.app_name}"
 
   # SSM parameters live under a per-app path so multiple apps can coexist.

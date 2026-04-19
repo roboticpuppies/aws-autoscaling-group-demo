@@ -8,7 +8,7 @@ This project builds AWS infrastructure for deploying a containerized web applica
 
 - **Compute**: EC2 instances running Docker containers (no ECS/EKS)
 - **AMI**: Pre-baked with Hashicorp Packer (Ubuntu 24.04 LTS x86-64)
-- **IaC**: Terraform v1.14.8, AWS provider ~> 6.41
+- **IaC**: Terraform v1.14.8, AWS provider ~> 6.41, orchestrated by Terragrunt v1.0.1 (OpenTofu-backed release; native `stack`/`unit` syntax — NOT the legacy Gruntwork version)
 - **Secrets**: AWS SSM Parameter Store (SecureString) for environment variables
 - **Registry**: Amazon ECR for Docker images
 - **Region**: ap-southeast-3 (Jakarta)
@@ -16,10 +16,19 @@ This project builds AWS infrastructure for deploying a containerized web applica
 - **Load Balancing**: Shared internet-facing ALB with per-app listener rules (default 404)
 - **Scaling**: Autoscaling Group (no dynamic scaling policies configured yet)
 - **Consistency**: SSM Parameter Store is the single source of truth; instances read image tag and env vars at boot time
-- **Multi-App Support**: ALB is shared infrastructure; per-app files (`app-*.tf`) can be duplicated for future apps. The `app_name` variable namespaces SSM parameters (`/<project>/<env>/<app_name>/...`), per-app resource names (`<project>-<env>-<app_name>-*`), and the on-instance compose directory (`/home/ubuntu/<app_name>`).
+- **Multi-App Support**: Two reusable Terraform modules — `shared-infra` (VPC + ALB + ALB SG) and `app` (ASG, target group, listener rule, IAM, SSM, SNS, app SG). Adding a new app = copy one Terragrunt unit file; no Terraform file duplication. The `app_name` variable namespaces SSM parameters (`/<project>/<env>/<app_name>/...`), per-app resource names (`<project>-<env>-<app_name>-*`), and the on-instance compose directory (`/home/ubuntu/<app_name>`).
 - **Container Runtime**: Each instance runs the app via `docker compose up -d` from `/home/ubuntu/<app_name>`. The user data script generates `docker-compose.yml` and `.env` from SSM at boot.
 
 ## Terraform Modules
+
+### First-party (in `terraform/modules/`)
+
+| Module | Purpose |
+|--------|---------|
+| `shared-infra` | VPC, ALB, ALB security group. One instance per environment. |
+| `app` | ASG, target group + listener rule on the shared ALB, IAM role/policies, SSM parameters (image tag + SecureString env vars), SNS alert topic, app SG. One instance per application. |
+
+### Registry modules used
 
 | Module | Version |
 |--------|---------|
@@ -29,11 +38,26 @@ This project builds AWS infrastructure for deploying a containerized web applica
 
 ## Project Structure
 
-- `packer/` - Packer template and provisioning scripts for AMI
-- `terraform/` - Terraform configuration (shared infra + per-app resources)
-  - Files prefixed with `app-` are per-app and can be duplicated for new apps
-  - `templates/user-data.sh.tftpl` - Boot script that reads SSM and runs Docker
-- `docs/` - Documentation (autoscaling behavior, CI/CD updates, instance naming)
+```
+.
+├── packer/                          # Packer template + provisioning scripts for the AMI
+├── terraform/
+│   └── modules/
+│       ├── shared-infra/            # VPC, ALB, ALB SG
+│       └── app/                     # ASG, target group, IAM, SSM, SNS, app SG
+│           └── templates/
+│               └── user-data.sh.tftpl
+├── terragrunt/
+│   ├── root.hcl                     # Remote state (S3), provider + versions generate blocks
+│   └── production/
+│       ├── env.hcl                  # Environment-scoped inputs (VPC CIDR, AZs, subnets)
+│       ├── shared-infra/
+│       │   └── terragrunt.hcl       # Deploys the shared-infra module
+│       └── apps/
+│           └── web/
+│               └── terragrunt.hcl   # Deploys the app module for one app
+└── docs/                            # Autoscaling behavior, CI/CD updates, instance naming
+```
 
 ## Pre-Baked AMI Contents
 
@@ -43,15 +67,47 @@ This project builds AWS infrastructure for deploying a containerized web applica
 - ZSH + OhMyZSH (plugins: history, docker, docker-compose; auto-update enabled)
 - Automatic OS updates at midnight UTC+7 (17:00 UTC)
 
-## CI/CD Deployment Flow (No Terraform Required)
+## Adding a New App
+
+Full operator runbook in [docs/adding-a-new-app.md](docs/adding-a-new-app.md). Short version: no Terraform code needs to change. Pick an `app_name` (e.g., `admin`) and a unique `listener_rule_priority`, then:
+
+1. `cp -r terragrunt/production/apps/web terragrunt/production/apps/<new_app>`
+2. Edit `terragrunt/production/apps/<new_app>/terragrunt.hcl`:
+   - Change `app_name = "<new_app>"`
+   - Set a unique `listener_rule_priority` (not already used by another app in this environment; lower numbers are evaluated first)
+   - Set `listener_rule_path_patterns` if the app is path-routed (defaults to `["/*"]`)
+   - Update `ami_id`, `docker_image_repo`, `app_env_vars`, and any ASG sizing inputs as needed
+3. `terragrunt run --working-dir terragrunt/production/apps/<new_app> -- plan`
+4. `terragrunt run --working-dir terragrunt/production/apps/<new_app> -- apply` (after explicit user approval)
+
+## Deploy / Destroy Workflow
+
+Run everything from the repo root. Examples:
+
+```bash
+# One unit at a time
+terragrunt run --working-dir terragrunt/production/shared-infra -- plan
+terragrunt run --working-dir terragrunt/production/shared-infra -- apply
+
+terragrunt run --working-dir terragrunt/production/apps/web -- plan
+terragrunt run --working-dir terragrunt/production/apps/web -- apply
+
+# Whole environment (Terragrunt resolves the dependency graph)
+terragrunt run --all --working-dir terragrunt/production -- plan
+terragrunt run --all --working-dir terragrunt/production -- apply
+```
+
+Remote state is configured in `terragrunt/root.hcl`. Each unit gets its own S3 key via `path_relative_to_include()` (e.g., `production/shared-infra/terraform.tfstate`, `production/apps/web/terraform.tfstate`). Set `TG_STATE_BUCKET` and `TG_STATE_REGION` env vars to override the defaults, or edit the `locals` block in `root.hcl`.
+
+## CI/CD Deployment Flow (No Terraform/Terragrunt Required)
 
 1. Build and push Docker image to ECR
 2. Update SSM parameter: `aws ssm put-parameter --name "<prefix>/docker-image-tag" --value "<new-tag>" --overwrite`
 3. Trigger instance refresh: `aws autoscaling start-instance-refresh --auto-scaling-group-name <asg-name>`
-4. SSM parameters use `lifecycle { ignore_changes = [value] }` so Terraform won't revert CI/CD changes
+4. SSM parameters use `lifecycle { ignore_changes = [value] }` in the `app` module, so neither `terraform apply` nor `terragrunt apply` will revert CI/CD changes
 
-## Terraform Guidelines
+## Terraform / Terragrunt Guidelines
 
-- Do NOT run `terraform apply` without explicit user approval
-- Use variables for all configurable values
+- Do NOT run `terraform apply` or `terragrunt apply` / `terragrunt run --all -- apply` without explicit user approval
+- Use variables for all configurable values; keep modules provider-free (the provider block is generated by `terragrunt/root.hcl`)
 - Use the Terraform and AWS MCP servers for registry lookups

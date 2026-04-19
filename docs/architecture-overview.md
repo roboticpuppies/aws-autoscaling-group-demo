@@ -7,9 +7,9 @@ We built the AWS infrastructure for running our containerized web app on EC2, wi
 The result is two things:
 
 1. **A pre-baked Ubuntu AMI** (built by Packer) that boots ready to run Docker, ship metrics, and self-update.
-2. **A Terraform stack** that provisions the network, a shared load balancer, and a per-app autoscaling group whose runtime config (image tag + env vars) lives in AWS SSM Parameter Store.
+2. **A Terraform + Terragrunt stack** that provisions the network, a shared load balancer, and a per-app autoscaling group whose runtime config (image tag + env vars) lives in AWS SSM Parameter Store. Terragrunt (v1.0.1) orchestrates two reusable Terraform modules — `shared-infra` and `app` — so adding a new app is a single unit-file copy, not a Terraform file duplication.
 
-The design lets CI/CD deploy new versions **without ever touching Terraform** -- it just updates an SSM parameter and triggers a rolling instance refresh. It is also explicitly built to host **multiple apps under one ALB** as the team grows.
+The design lets CI/CD deploy new versions **without ever touching Terraform or Terragrunt** -- it just updates an SSM parameter and triggers a rolling instance refresh. It is also explicitly built to host **multiple apps under one ALB** as the team grows.
 
 ---
 
@@ -80,30 +80,32 @@ Pre-baked image so instance startup time is dominated by `docker pull`, not by `
 
 Build with `packer build packer/ubuntu-docker.pkr.hcl`. The resulting AMI ID is then fed to Terraform via `var.ami_id`.
 
-### 2. The Terraform Stack
+### 2. The Terraform + Terragrunt Stack
 
-Split into two logical halves:
+Two reusable Terraform modules under `terraform/modules/`, orchestrated per-environment and per-app by Terragrunt units under `terragrunt/`.
 
-#### Shared Infrastructure (one per environment)
+#### `shared-infra` module (one instance per environment)
 
-| File | Purpose |
-|---|---|
-| [vpc.tf](../terraform/vpc.tf) | VPC, three public subnets across 3 AZs, IGW |
-| [security-groups.tf](../terraform/security-groups.tf) (ALB SG) | Shared SG: allows :80/:443 from internet |
-| [alb.tf](../terraform/alb.tf) | Internet-facing ALB. Default listener action returns **HTTP 404 fixed response** so unmatched traffic is rejected cleanly |
-
-#### Per-App Resources (one set per app)
-
-These files are prefixed `app-*.tf`. Adding a new app means duplicating them with a different `app_name`.
+Consumed by `terragrunt/production/shared-infra/terragrunt.hcl`.
 
 | File | Purpose |
 |---|---|
-| [app-target-group.tf](../terraform/app-target-group.tf) | Target group + ALB listener rule (currently catch-all `/*` at priority 100) |
-| [app-iam.tf](../terraform/app-iam.tf) | IAM role for EC2: SSM read, EC2 self-tag, ECR pull |
-| [app-ssm.tf](../terraform/app-ssm.tf) | SSM parameters under `/<project>/<env>/<app_name>/...` with `lifecycle { ignore_changes = [value] }` |
-| [security-groups.tf](../terraform/security-groups.tf) (EC2 SG) | Per-app SG: app port from ALB only, SSH from allowlist, :9100 from VPC |
-| [app-asg.tf](../terraform/app-asg.tf) | Launch template + ASG, attached to target group, instance refresh enabled |
-| [templates/user-data.sh.tftpl](../terraform/templates/user-data.sh.tftpl) | Boot script (see next section) |
+| [modules/shared-infra/main.tf](../terraform/modules/shared-infra/main.tf) | VPC (3 public subnets across 3 AZs, IGW), ALB SG (allows :80/:443 from internet), and internet-facing ALB. Default listener action returns **HTTP 404 fixed response** so unmatched traffic is rejected cleanly. |
+| [modules/shared-infra/outputs.tf](../terraform/modules/shared-infra/outputs.tf) | Emits `vpc_id`, `vpc_cidr`, `public_subnet_ids`, `alb_listener_arn`, `alb_security_group_id` — the wiring surface the `app` module depends on. |
+
+#### `app` module (one instance per application)
+
+Consumed by `terragrunt/production/apps/<app_name>/terragrunt.hcl`. Adding a new app means copying one `terragrunt.hcl` file, not duplicating Terraform code.
+
+| File | Purpose |
+|---|---|
+| [modules/app/target-group.tf](../terraform/modules/app/target-group.tf) | Target group + ALB listener rule on the shared listener (priority + path patterns are per-unit inputs) |
+| [modules/app/iam.tf](../terraform/modules/app/iam.tf) | IAM role for EC2: SSM read, EC2 self-tag, ECR pull, ASG lifecycle, SNS publish |
+| [modules/app/ssm.tf](../terraform/modules/app/ssm.tf) | SSM parameters under `/<project>/<env>/<app_name>/...` with `lifecycle { ignore_changes = [value] }` |
+| [modules/app/security-group.tf](../terraform/modules/app/security-group.tf) | Per-app SG: app port from ALB only, SSH from allowlist, :9100 from VPC |
+| [modules/app/asg.tf](../terraform/modules/app/asg.tf) | Launch template + ASG, attached to target group, instance refresh enabled |
+| [modules/app/sns.tf](../terraform/modules/app/sns.tf) | SNS topic for user-data errors (optional email subscription) |
+| [modules/app/templates/user-data.sh.tftpl](../terraform/modules/app/templates/user-data.sh.tftpl) | Boot script (see next section) |
 
 ### 3. The Boot Script
 
@@ -175,7 +177,7 @@ Image tag and env vars are stored in SSM, and the Terraform resources for them u
 ### 6. `app_name` variable + derived SSM prefix and resource names
 
 - **Why:** Lets a second app live in the same project/environment without colliding. The compose dir, SSM prefix, ASG name, IAM role name, etc. all incorporate `app_name`.
-- **Tradeoff:** Every app added still requires duplicating `app-*.tf` files. A future refactor into a Terraform module would eliminate that.
+- **Tradeoff:** Every app still needs its own Terragrunt unit file (one `terragrunt.hcl` per app) and a unique `listener_rule_priority` to avoid shadowing another app's rule on the shared listener.
 
 ---
 
@@ -232,23 +234,37 @@ ALB marks an instance unhealthy after 3 failed checks → ASG terminates it → 
 │   ├── ubuntu-docker.pkr.hcl         # AMI build spec
 │   └── scripts/                      # Provisioning scripts (Docker, AWS CLI, etc.)
 ├── terraform/
-│   ├── versions.tf                   # TF + provider version constraints
-│   ├── providers.tf                  # AWS provider config
-│   ├── variables.tf                  # All inputs
-│   ├── main.tf                       # Locals + data sources
-│   ├── vpc.tf                        # SHARED: VPC + subnets
-│   ├── security-groups.tf            # SHARED ALB SG + per-app EC2 SG
-│   ├── alb.tf                        # SHARED: ALB with default 404
-│   ├── app-target-group.tf           # PER-APP: target group + listener rule
-│   ├── app-iam.tf                    # PER-APP: IAM role/profile
-│   ├── app-ssm.tf                    # PER-APP: SSM parameters
-│   ├── app-asg.tf                    # PER-APP: launch template + ASG
-│   ├── outputs.tf                    # Useful outputs (ALB DNS, ASG name, etc.)
-│   ├── terraform.tfvars.example      # Reference values
-│   └── templates/
-│       └── user-data.sh.tftpl        # Boot script (heavily commented)
+│   └── modules/
+│       ├── shared-infra/             # VPC + ALB + ALB SG (one per environment)
+│       │   ├── main.tf
+│       │   ├── variables.tf
+│       │   ├── outputs.tf
+│       │   └── versions.tf
+│       └── app/                      # ASG, target group, listener rule, IAM, SSM, SNS, app SG
+│           ├── main.tf               #   (one instance per application)
+│           ├── variables.tf
+│           ├── outputs.tf
+│           ├── versions.tf
+│           ├── asg.tf
+│           ├── iam.tf
+│           ├── ssm.tf
+│           ├── sns.tf
+│           ├── security-group.tf
+│           ├── target-group.tf
+│           └── templates/
+│               └── user-data.sh.tftpl # Boot script (heavily commented)
+├── terragrunt/
+│   ├── root.hcl                      # Remote state (S3), provider + versions generate
+│   └── production/
+│       ├── env.hcl                   # Environment-scoped inputs (VPC CIDR, AZs, subnets)
+│       ├── shared-infra/
+│       │   └── terragrunt.hcl        # Deploys shared-infra module
+│       └── apps/
+│           └── web/
+│               └── terragrunt.hcl    # Deploys app module for one app
 └── docs/
     ├── architecture-overview.md      # ← you are here
+    ├── adding-a-new-app.md           # Operator runbook for onboarding a new app
     ├── autoscaling-behavior.md       # Scale-out/in mechanics
     ├── updating-with-cicd.md         # Deployment workflow + Jenkins example
     └── instance-naming.md            # How instances tag themselves
@@ -258,13 +274,16 @@ ALB marks an instance unhealthy after 3 failed checks → ASG terminates it → 
 
 ## Adding a Second App
 
-The structure is designed to make this straightforward:
+The structure is designed to make this straightforward — no Terraform code changes required. Full runbook in [adding-a-new-app.md](adding-a-new-app.md). In short:
 
 1. Decide a new `app_name` (e.g., `api`).
-2. Duplicate the `app-*.tf` files into a parallel set (or refactor them into a module).
-3. Pick a new `priority` and `path_pattern`/`host_header` for the listener rule (e.g., `/api/*` at priority 90).
-4. Pick a different `app_port` if both apps will run on the same instance type (or just keep separate ASGs, which is what we do).
-5. `terraform apply`. The shared ALB picks up the new rule; the new ASG comes online.
+2. `cp -r terragrunt/production/apps/web terragrunt/production/apps/api`
+3. Edit `terragrunt/production/apps/api/terragrunt.hcl`:
+   - Set `app_name = "api"`
+   - Set a unique `listener_rule_priority` (e.g., `200`) — must not collide with any other app in the environment
+   - Set `listener_rule_path_patterns` if path-routed (e.g., `["/api/*"]`; defaults to `["/*"]`)
+   - Update `ami_id`, `docker_image_repo`, `app_env_vars`, and ASG sizing inputs as needed
+4. `terragrunt run --working-dir terragrunt/production/apps/api -- plan`, then `-- apply` (after explicit user approval). The shared ALB picks up the new listener rule; the new ASG comes online.
 
 ---
 
@@ -273,12 +292,10 @@ The structure is designed to make this straightforward:
 | Item | Priority | Why |
 |---|---|---|
 | HTTPS listener + ACM cert | High | Currently HTTP-only |
-| Remote Terraform backend (S3 + DynamoDB lock) | High | Local state is not safe for a team |
 | Private subnets + NAT | Medium | Removes public IPs from instances |
 | CloudWatch agent on AMI | Medium | Ship app/container logs to CloudWatch |
 | Dynamic scaling policies (CPU, request count) | Medium | Currently scaling is manual |
 | WAF on the ALB | Medium | Basic L7 protection |
-| Refactor `app-*.tf` into a Terraform module | Low | Reduces duplication when we add more apps |
 | Packer build pipeline (e.g., monthly AMI bake) | Low | Keeps base packages fresh without relying solely on unattended-upgrades |
 
 ---
@@ -286,20 +303,18 @@ The structure is designed to make this straightforward:
 ## Verification Done
 
 - `packer validate packer/ubuntu-docker.pkr.hcl` -- passes
-- `terraform init` -- modules resolve cleanly
-- `terraform validate` -- passes with no warnings
-- `terraform fmt -recursive` -- clean
-- **`terraform apply` has NOT been run** -- per the project guideline, this requires explicit approval
+- `terraform fmt -recursive terraform/modules` -- clean
+- **`terraform init` / `terragrunt init` / `apply` have NOT been run** -- per the project guideline, any apply requires explicit approval, and init writes lock files that are better deferred until the S3 backend bucket is set
 
 ---
 
 ## TL;DR for Leadership
 
-We have a **pre-baked AMI** + a **Terraform stack** that gives us:
+We have a **pre-baked AMI** + a **Terraform + Terragrunt stack** that gives us:
 
 - Autoscaling EC2 instances behind a load balancer
 - Zero-Terraform deployments via SSM + instance refresh
 - Self-healing on instance failure
-- A path to add more apps under the same ALB
+- A one-file path to add more apps under the same ALB (copy one Terragrunt unit)
 
-It is ready to deploy once we get sign-off and provide real values (AMI ID, ECR repo URI, env vars).
+It is ready to deploy once we get sign-off and provide real values (AMI ID, ECR repo URI, env vars, S3 state bucket).

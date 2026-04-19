@@ -1,5 +1,10 @@
 # =============================================================================
 # Per-App: SSM Parameter Store
+# -----------------------------------------------------------------------------
+# SSM is the single source of truth for the image tag and app env vars at boot
+# time. We seed the parameters here on first apply, but CI/CD owns the values
+# thereafter — `ignore_changes = [value]` prevents `terraform apply` from
+# reverting an in-flight deploy.
 # =============================================================================
 
 resource "aws_ssm_parameter" "docker_image_repo" {

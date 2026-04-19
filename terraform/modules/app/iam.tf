@@ -17,7 +17,7 @@ resource "aws_iam_role" "ec2" {
   tags = local.common_tags
 }
 
-# SSM Parameter Store read access
+# SSM Parameter Store read access (scoped to this app's prefix)
 resource "aws_iam_role_policy" "ssm_read" {
   name = "ssm-parameter-read"
   role = aws_iam_role.ec2.id

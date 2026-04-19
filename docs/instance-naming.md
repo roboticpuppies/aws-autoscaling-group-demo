@@ -59,7 +59,7 @@ The EC2 instance profile includes the following permissions to allow self-taggin
 }
 ```
 
-These permissions are defined in `terraform/app-iam.tf`.
+These permissions are defined in `terraform/modules/app/iam.tf`.
 
 ## Viewing Instance Names
 
@@ -94,7 +94,7 @@ If a collision occurs, it is purely cosmetic and does not affect instance functi
 
 ## Customization
 
-To change the naming format, modify the user data template at `terraform/templates/user-data.sh.tftpl`. For example:
+To change the naming format, modify the user data template at `terraform/modules/app/templates/user-data.sh.tftpl`. For example:
 
 - **Use 6 characters instead of 4**: Change `${INSTANCE_ID: -4}` to `${INSTANCE_ID: -6}`
 - **Add a custom prefix**: Change the format string to include additional identifiers

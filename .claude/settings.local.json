@@ -7,7 +7,8 @@
       "mcp__terraform__get_module_details",
       "Bash(packer fmt *)",
       "Bash(packer validate *)",
-      "Bash(terraform fmt *)"
+      "Bash(terraform fmt *)",
+      "Bash(terragrunt hcl *)"
     ]
   },
   "enabledMcpjsonServers": [
