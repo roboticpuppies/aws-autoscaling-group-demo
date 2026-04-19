@@ -1,0 +1,260 @@
+#!/bin/bash
+# =============================================================================
+# EC2 User Data Script
+# -----------------------------------------------------------------------------
+# This script runs once on each new instance launched by the Auto Scaling Group.
+# It is rendered by Terraform's `templatefile()` function: any "$${...}" without
+# a `$$` prefix is a Terraform variable substitution, while "$$$${...}" escapes
+# the dollar sign so the final script contains a real bash variable reference.
+#
+# Responsibilities:
+#   1. Tag the instance with a human-readable Name
+#   2. Authenticate to ECR so docker can pull the app image
+#   3. Read the Docker image and env vars from SSM Parameter Store
+#   4. Generate docker-compose.yml + .env in /home/ubuntu/<app_name>
+#   5. Start the container with `docker compose up -d`
+# =============================================================================
+
+# Fail fast on any error, undefined variable, or failed pipe stage
+set -euo pipefail
+
+# Mirror all stdout/stderr to /var/log/user-data.log so failures are debuggable
+# after the fact via SSH or `aws ec2 get-console-output`.
+exec > >(tee /var/log/user-data.log) 2>&1
+echo "=== User data script started at $(date) ==="
+
+# -----------------------------------------------------------------------------
+# Configuration injected by Terraform at render time.
+# After templatefile() runs, these become literal values in the script.
+# -----------------------------------------------------------------------------
+REGION="${region}"
+SSM_PREFIX="${ssm_prefix}"
+APP_PORT="${app_port}"
+APP_NAME="${app_name}"
+ASG_NAME="${asg_name}"
+ACCOUNT_ID="${account_id}"
+SNS_TOPIC_ARN="${sns_topic_arn}"
+LIFECYCLE_HOOK_NAME="${lifecycle_hook_name}"
+APP_DIR="/home/ubuntu/$${APP_NAME}"
+
+# Block until cloud-init has finished its own setup (apt locks, network, etc.)
+# `|| true` prevents a non-zero exit from aborting the script under set -e.
+cloud-init status --wait || true
+
+# =============================================================================
+# Instance Identity (IMDSv2)
+# -----------------------------------------------------------------------------
+# Fetched up-front — before the ERR trap is installed — so the error handler
+# always has the instance ID and IP to include in the SNS alert, even if a
+# later step fails. Each call falls back to "unknown" so a transient IMDS
+# hiccup doesn't itself trip `set -e` before we can report errors.
+#
+# IMDSv2 (token-based) is required because the launch template enforces
+# `http_tokens = "required"`.
+# =============================================================================
+
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || echo "")
+
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id || echo "unknown")
+
+INSTANCE_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/local-ipv4 || echo "unknown")
+
+# =============================================================================
+# Error Handler → SNS
+# -----------------------------------------------------------------------------
+# On any command failure, publish a detailed alert to the per-app SNS topic
+# so the ops team learns about boot-time regressions without having to pull
+# console output manually. `|| true` on the publish keeps a failed SNS call
+# from masking the original exit code.
+# =============================================================================
+
+on_error() {
+  local exit_code=$?
+  local line_no=$1
+  local failed_cmd=$2
+
+  aws sns publish \
+    --region "$REGION" \
+    --topic-arn "$SNS_TOPIC_ARN" \
+    --subject "User-data failed: $${APP_NAME} on $${INSTANCE_ID}" \
+    --message "User-data script failed.
+App: $${APP_NAME}
+Instance ID: $${INSTANCE_ID}
+IP Address: $${INSTANCE_IP}
+ASG: $${ASG_NAME}
+Region: $${REGION}
+Exit Code: $${exit_code}
+Failed At Line: $${line_no}
+Failed Command: $${failed_cmd}
+Time: $(date -u +'%Y-%m-%dT%H:%M:%SZ')
+Log: /var/log/user-data.log on the instance" \
+    >/dev/null 2>&1 || true
+
+  # Release the ASG launch hook with ABANDON so the instance is terminated
+  # immediately instead of hanging in Pending:Wait until the heartbeat expires.
+  aws autoscaling complete-lifecycle-action \
+    --region "$REGION" \
+    --auto-scaling-group-name "$ASG_NAME" \
+    --lifecycle-hook-name "$LIFECYCLE_HOOK_NAME" \
+    --instance-id "$INSTANCE_ID" \
+    --lifecycle-action-result ABANDON \
+    >/dev/null 2>&1 || true
+
+  exit $exit_code
+}
+trap 'on_error $LINENO "$BASH_COMMAND"' ERR
+
+# =============================================================================
+# Instance Self-Naming
+# -----------------------------------------------------------------------------
+# Tag this instance with `<asg-name>-<last-4-of-instance-id>` so it is easy to
+# identify in the EC2 console.
+# =============================================================================
+
+# Bash parameter expansion `$${VAR: -4}` returns the last 4 characters.
+SHORT_ID="$${INSTANCE_ID: -4}"
+INSTANCE_NAME="$${ASG_NAME}-$${SHORT_ID}"
+
+aws ec2 create-tags \
+  --region "$REGION" \
+  --resources "$INSTANCE_ID" \
+  --tags "Key=Name,Value=$INSTANCE_NAME"
+
+echo "Instance named: $INSTANCE_NAME"
+
+# =============================================================================
+# ECR Authentication
+# -----------------------------------------------------------------------------
+# Trade the instance's IAM role credentials for a short-lived ECR password,
+# then pipe it into `docker login`. This must run before any `docker pull`
+# of an image hosted in our private ECR registry.
+# =============================================================================
+
+aws ecr get-login-password --region "$REGION" | \
+  docker login --username AWS --password-stdin "$${ACCOUNT_ID}.dkr.ecr.$${REGION}.amazonaws.com"
+
+echo "ECR authentication successful"
+
+# =============================================================================
+# Read Docker Image Info from SSM
+# -----------------------------------------------------------------------------
+# SSM Parameter Store is the single source of truth for which image to run.
+# CI/CD updates these values; Terraform's `lifecycle { ignore_changes = [value] }`
+# block prevents subsequent `terraform apply` calls from reverting them.
+# =============================================================================
+
+IMAGE_REPO=$(aws ssm get-parameter \
+  --region "$REGION" \
+  --name "$${SSM_PREFIX}/docker-image-repo" \
+  --query 'Parameter.Value' --output text)
+
+IMAGE_TAG=$(aws ssm get-parameter \
+  --region "$REGION" \
+  --name "$${SSM_PREFIX}/docker-image-tag" \
+  --query 'Parameter.Value' --output text)
+
+echo "Will run image: $${IMAGE_REPO}:$${IMAGE_TAG}"
+
+# =============================================================================
+# Write Environment Variables from SSM to .env file
+# -----------------------------------------------------------------------------
+# Every parameter under `$${SSM_PREFIX}/env/` becomes one line in the .env file
+# that docker-compose loads via `env_file`. Parameters are SecureString and
+# decrypted in transit via `--with-decryption`.
+# =============================================================================
+
+# Create the per-app working directory and an empty, restrictively-permissioned
+# .env file (mode 600 so only root/ubuntu can read decrypted secrets).
+mkdir -p "$APP_DIR"
+chown ubuntu:ubuntu "$APP_DIR"
+APP_ENV_FILE="$APP_DIR/.env"
+: > "$APP_ENV_FILE"
+chmod 600 "$APP_ENV_FILE"
+
+# Fetch all env-var parameters in one call. `|| true` so an empty result set
+# (no env vars configured for this app) doesn't trip set -e.
+PARAMS=$(aws ssm get-parameters-by-path \
+  --region "$REGION" \
+  --path "$${SSM_PREFIX}/env/" \
+  --with-decryption \
+  --query 'Parameters[*].[Name,Value]' --output text) || true
+
+# Each line of $PARAMS is "<full-ssm-name>\t<value>". Strip the SSM path with
+# `basename` to get just the env var name and append `KEY=VALUE` to .env.
+if [ -n "$PARAMS" ]; then
+  while IFS=$'\t' read -r param_name param_value; do
+    if [ -n "$param_name" ]; then
+      env_name=$(basename "$param_name")
+      printf '%s=%s\n' "$env_name" "$param_value" >> "$APP_ENV_FILE"
+    fi
+  done <<< "$PARAMS"
+fi
+
+echo "Environment variables written to $APP_ENV_FILE"
+
+# =============================================================================
+# Generate docker-compose.yml
+# -----------------------------------------------------------------------------
+# Heredoc renders a minimal compose file. The service name matches the app name
+# so `docker compose ps`, `logs`, etc. show meaningful labels. `restart:
+# unless-stopped` makes the container survive Docker daemon restarts but still
+# obey explicit `docker compose down` calls.
+# =============================================================================
+
+cat > "$APP_DIR/docker-compose.yml" <<EOF
+services:
+  $${APP_NAME}:
+    image: $${IMAGE_REPO}:$${IMAGE_TAG}
+    container_name: $${APP_NAME}
+    restart: unless-stopped
+    ports:
+      - "$${APP_PORT}:$${APP_PORT}"
+    env_file:
+      - .env
+EOF
+
+# Make the whole app dir owned by ubuntu so an SSH user can inspect/edit
+# without sudo.
+chown -R ubuntu:ubuntu "$APP_DIR"
+echo "docker-compose.yml generated at $APP_DIR/docker-compose.yml"
+
+# =============================================================================
+# Start Application via Docker Compose
+# -----------------------------------------------------------------------------
+# Ensure the Docker daemon is up (it should be, since systemd enables it at
+# boot via the AMI), then pull the image and start the container detached.
+# Once the app starts responding to /health, the ALB target group health check
+# will mark this instance healthy and route traffic to it.
+# =============================================================================
+
+systemctl start docker
+sleep 2
+
+cd "$APP_DIR"
+docker compose pull
+docker compose up -d
+
+echo "=== Container started at $(date) ==="
+
+# =============================================================================
+# Signal ASG Launch Lifecycle Hook
+# -----------------------------------------------------------------------------
+# The instance has been held in Pending:Wait since launch and is NOT yet
+# attached to the target group. CONTINUE tells the ASG to proceed: the
+# traffic_source_attachments config then attaches the instance, and the ALB
+# health check takes over as the steady-state liveness signal. If this call
+# fails, the ERR trap fires and sends ABANDON instead so we don't leave the
+# instance stuck until the heartbeat expires.
+# =============================================================================
+
+aws autoscaling complete-lifecycle-action \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG_NAME" \
+  --lifecycle-hook-name "$LIFECYCLE_HOOK_NAME" \
+  --instance-id "$INSTANCE_ID" \
+  --lifecycle-action-result CONTINUE
+
+echo "=== User data script completed ==="

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__terraform__get_latest_provider_version",
+      "mcp__terraform__search_modules",
+      "mcp__aws-knowledge-mcp-server__aws___search_documentation",
+      "mcp__terraform__get_module_details",
+      "Bash(packer fmt *)",
+      "Bash(packer validate *)",
+      "Bash(terraform fmt *)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "terraform",
+    "aws-knowledge-mcp-server"
+  ]
+}
