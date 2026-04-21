@@ -2,6 +2,10 @@
 
 AWS infrastructure for running containerized apps on EC2 with autoscaling. No ECS, no EKS — just Docker on EC2, managed by the ops team using tools they already know.
 
+## Background
+
+How to run scalable, containerized web applications on AWS without ECS or EKS. The ops team is comfortable with EC2 but the learning curve for container orchestration services is too steep — so this project proves out a simpler path: Docker on EC2, Auto Scaling Groups for elasticity, and SSM Parameter Store as the config/secrets layer. This project is also my research paper project for university.
+
 ## What's in here
 
 | Directory | What it does |
