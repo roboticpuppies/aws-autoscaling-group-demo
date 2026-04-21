@@ -26,7 +26,7 @@ module "asg" {
 
   security_groups = [aws_security_group.ec2.id]
 
-  # IAM instance profile (created externally in app-iam.tf)
+  # IAM instance profile (created externally in iam.tf)
   create_iam_instance_profile = false
   iam_instance_profile_arn    = aws_iam_instance_profile.ec2.arn
 
@@ -42,7 +42,7 @@ module "asg" {
   max_size         = var.asg_max_size
   desired_capacity = var.asg_desired_capacity
 
-  vpc_zone_identifier = module.vpc.public_subnets
+  vpc_zone_identifier = var.public_subnet_ids
 
   health_check_type         = "ELB"
   health_check_grace_period = var.health_check_grace_period

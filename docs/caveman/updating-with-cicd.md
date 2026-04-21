@@ -1,41 +1,33 @@
-# Updating Image Tag and Environment Variables with CI/CD
+# Updating with CI/CD
 
-## Overview
+SSM Parameter Store = single source of truth for image tag + env vars. Deploy = update SSM + trigger instance refresh. No Terraform needed.
 
-This project uses AWS SSM Parameter Store as the single source of truth for the Docker image tag and environment variables. Deploying a new version does **not** require changes to Terraform -- you update the SSM parameter values and trigger an ASG instance refresh.
-
-SSM parameters for each app live under the prefix `/<project_name>/<environment>/<app_name>`. The examples below use `/myproject/production/myapp` and an ASG named `myproject-production-myapp-asg`.
+SSM prefix: `/<project_name>/<environment>/<app_name>`. Examples use `/myproject/production/myapp` and ASG `myproject-production-myapp-asg`.
 
 ## How It Works
 
-1. **SSM Parameter Store** holds the Docker image repository, tag, and all environment variables
-2. The `app` Terraform module (`terraform/modules/app/ssm.tf`) creates these parameters initially but uses `lifecycle { ignore_changes = [value] }`, so CI/CD can update values without `terraform apply` / `terragrunt apply` reverting them
-3. **User data script** on each instance reads SSM parameters at boot time
-4. **Instance refresh** replaces instances in a rolling fashion; new instances read the updated SSM values
+1. **SSM** holds Docker image repo, tag, all env vars.
+2. `app` module creates SSM params with `lifecycle { ignore_changes = [value] }` — CI/CD updates won't get reverted by `terragrunt apply`.
+3. **User data** reads SSM at boot.
+4. **Instance refresh** rolls new instances that read updated SSM values.
 
-## Deployment Workflow
+## Deployment Steps
 
-### Step 1: Build and Push Docker Image
+### Step 1: Build + Push Image
 
 ```bash
-# Build the image
 docker build -t myapp:v1.2.3 .
-
-# Tag for ECR
 docker tag myapp:v1.2.3 123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/myapp:v1.2.3
 
-# Authenticate to ECR
 aws ecr get-login-password --region ap-southeast-3 | \
   docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-southeast-3.amazonaws.com
 
-# Push
 docker push 123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/myapp:v1.2.3
 ```
 
-### Step 2: Update SSM Parameter
+### Step 2: Update SSM
 
 ```bash
-# Update image tag
 aws ssm put-parameter \
   --name "/myproject/production/myapp/docker-image-tag" \
   --value "v1.2.3" \
@@ -51,41 +43,36 @@ aws autoscaling start-instance-refresh \
   --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
 ```
 
-### Step 4: Monitor Deployment
+### Step 4: Monitor
 
 ```bash
-# Poll until status is "Successful"
 aws autoscaling describe-instance-refreshes \
   --auto-scaling-group-name myproject-production-myapp-asg \
   --query 'InstanceRefreshes[0].{Status:Status,PercentageComplete:PercentageComplete}'
 ```
 
-## Updating Environment Variables
+## Update Env Vars
 
 ```bash
-# Update a single environment variable
 aws ssm put-parameter \
   --name "/myproject/production/myapp/env/DATABASE_URL" \
   --value "postgresql://newhost:5432/db" \
   --type SecureString \
   --overwrite
 
-# Then trigger instance refresh (same as above)
 aws autoscaling start-instance-refresh \
   --auto-scaling-group-name myproject-production-myapp-asg \
   --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
 ```
 
-## Adding New Environment Variables
+## Add New Env Var
 
 ```bash
-# Create a new SSM parameter under the /env/ path
 aws ssm put-parameter \
   --name "/myproject/production/myapp/env/NEW_VARIABLE" \
   --value "some-value" \
   --type SecureString
 
-# Trigger instance refresh to pick up the new variable
 aws autoscaling start-instance-refresh \
   --auto-scaling-group-name myproject-production-myapp-asg \
   --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
@@ -199,8 +186,8 @@ pipeline {
 
 ## Important Notes
 
-- **Update SSM before triggering instance refresh**: If you trigger the refresh before updating SSM, new instances will launch with the old image tag.
-- **No Terraform changes needed**: The `lifecycle { ignore_changes = [value] }` block ensures Terraform does not revert SSM parameter values updated by CI/CD.
-- **Rollback**: To rollback, update the SSM image tag to the previous version and trigger another instance refresh.
-- **Concurrent refreshes**: Only one instance refresh can run at a time per ASG. A new refresh request while one is in progress will be rejected.
-- **Image availability**: Ensure the Docker image is fully pushed to ECR before updating the SSM parameter, otherwise new instances will fail to pull.
+- **Update SSM before refresh** — refresh before SSM update = new instances pull old image.
+- **No Terraform changes** — `lifecycle { ignore_changes = [value] }` blocks revert.
+- **Rollback** — set SSM image tag to previous version, trigger refresh.
+- **Concurrent refreshes** — one at a time per ASG. New request while one runs = rejected.
+- **Image must exist in ECR** before updating SSM param — new instances fail to pull otherwise.
