@@ -106,6 +106,10 @@ Remote state is configured in `terragrunt/root.hcl`. Each unit gets its own S3 k
 3. Trigger instance refresh: `aws autoscaling start-instance-refresh --auto-scaling-group-name <asg-name>`
 4. SSM parameters use `lifecycle { ignore_changes = [value] }` in the `app` module, so neither `terraform apply` nor `terragrunt apply` will revert CI/CD changes
 
+## Rebuilding the AMI
+
+Manual runbook in [docs/rebuilding-the-ami.md](docs/rebuilding-the-ami.md). Short version: `packer build` in `packer/`, copy the new AMI ID into every `terragrunt/<env>/apps/<app>/terragrunt.hcl` (`ami_id` input), `terragrunt run --all ... -- plan` then `apply` (after approval — only the launch template should change), then `aws autoscaling start-instance-refresh` per app. AMI ID is intentionally a plain input — no `data "aws_ami"` lookup — so rotation is an explicit, reviewable edit.
+
 ## Terraform / Terragrunt Guidelines
 
 - Do NOT run `terraform apply` or `terragrunt apply` / `terragrunt run --all -- apply` without explicit user approval
