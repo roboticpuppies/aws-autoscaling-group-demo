@@ -10,18 +10,31 @@
 # Targeted at Terragrunt v1.0.1 (OpenTofu-backed; `stack`/`unit` syntax native).
 # =============================================================================
 
+# =============================================================================
+# >>> DEPLOYMENT CONFIGURATION — ADJUST BEFORE FIRST `terragrunt apply` <<<
+# -----------------------------------------------------------------------------
+# Everyone deploying this project for the first time should edit the four
+# locals below. These are the only values you need to change here to retarget
+# the project at a different AWS account, team, or region.
+#
+# Region-scoped inputs that are NOT controlled here (VPC CIDR, AZs, public
+# subnet CIDRs) live in `terragrunt/<env>/env.hcl` — edit those too when
+# switching regions.
+# =============================================================================
 locals {
-  # Project-wide identity. Exposed to units so they don't have to re-declare it.
+  # Project identity. Ends up in the `Project` default tag and in the default
+  # state-bucket name.
   project_name = "myproject"
 
-  # State backend configuration.
-  # TODO: replace with the bucket your team owns. You can also override this
-  # via the TG_STATE_BUCKET env var without editing this file.
-  state_bucket = get_env("TG_STATE_BUCKET", "myproject-terraform-state")
-  state_region = get_env("TG_STATE_REGION", "ap-southeast-3")
+  # Remote state S3 bucket. MUST be globally unique across all of AWS. Either
+  # pre-create it yourself or let Terragrunt create it on first init.
+  state_bucket = "${local.project_name}-terraform-state"
 
-  # Default provider region. Unit-level env.hcl can override.
-  aws_region = get_env("AWS_REGION", "ap-southeast-3")
+  # Region the state bucket lives in. Usually the same as `aws_region`.
+  state_region = "ap-southeast-3"
+
+  # Default provider region for every unit.
+  aws_region = "ap-southeast-3"
 }
 
 # -----------------------------------------------------------------------------

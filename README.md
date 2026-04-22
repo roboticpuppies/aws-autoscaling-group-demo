@@ -25,6 +25,7 @@ How to run scalable, containerized web applications on AWS without ECS or EKS. T
 ## Docs
 
 - [Architecture Overview](docs/architecture-overview.md) — design decisions and component map
+- [Deploying to a New Region](docs/deploying-to-a-new-region.md) — runbook for first-time deploy or standing the project up in a new region
 - [Adding a New App](docs/adding-a-new-app.md) — operator runbook for onboarding a new application
 - [Updating with CI/CD](docs/updating-with-cicd.md) — how to deploy a new image tag or env vars without Terraform
 - [Autoscaling Behavior](docs/autoscaling-behavior.md) — how the ASG and instance refresh work
