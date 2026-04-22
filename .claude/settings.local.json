@@ -8,7 +8,11 @@
       "Bash(packer fmt *)",
       "Bash(packer validate *)",
       "Bash(terraform fmt *)",
-      "Bash(terragrunt hcl *)"
+      "Bash(terragrunt hcl *)",
+      "Bash(terraform -chdir=terraform/modules/app init -backend=false -input=false)",
+      "Bash(terraform -chdir=terraform/modules/app validate)",
+      "Bash(terraform -chdir=terraform/modules/shared-infra fmt -check -recursive)",
+      "Bash(terraform -chdir=terraform/modules/app fmt -check -recursive)"
     ]
   },
   "enabledMcpjsonServers": [

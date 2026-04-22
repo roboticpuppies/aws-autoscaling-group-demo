@@ -1,9 +1,10 @@
 # =============================================================================
-# Per-App: Target Group and ALB Listener Rule
+# Per-App: Target Group
 # -----------------------------------------------------------------------------
-# The target group lives here; the listener rule attaches to the shared ALB's
-# HTTP listener (ARN comes in via var.alb_listener_arn). Listener rule priority
-# is caller-controlled — each app must pick a unique value.
+# The ASG attaches to this target group via `traffic_source_attachments` in
+# asg.tf. With no ALB listener forwarding to it, the target group exists purely
+# as the health-check surface the ASG reads from (health_check_type = "ELB") —
+# that is what drives self-healing when an instance stops responding.
 # =============================================================================
 
 resource "aws_lb_target_group" "app" {
@@ -32,22 +33,4 @@ resource "aws_lb_target_group" "app" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-resource "aws_lb_listener_rule" "app" {
-  listener_arn = var.alb_listener_arn
-  priority     = var.listener_rule_priority
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
-  }
-
-  condition {
-    path_pattern {
-      values = var.listener_rule_path_patterns
-    }
-  }
-
-  tags = local.common_tags
 }

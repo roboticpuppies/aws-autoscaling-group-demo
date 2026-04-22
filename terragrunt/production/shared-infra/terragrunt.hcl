@@ -1,9 +1,8 @@
 # =============================================================================
 # Unit: production / shared-infra
 # -----------------------------------------------------------------------------
-# Deploys the shared VPC, shared ALB, and ALB security group. App units depend
-# on this unit and consume its outputs (vpc_id, public_subnet_ids,
-# alb_listener_http_arn, alb_security_group_id) via `dependency` blocks.
+# Deploys the shared VPC. App units depend on this unit and consume its
+# outputs (vpc_id, vpc_cidr, public_subnet_ids) via `dependency` blocks.
 # =============================================================================
 
 include "root" {

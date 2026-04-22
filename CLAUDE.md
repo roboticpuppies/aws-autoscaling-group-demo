@@ -13,10 +13,10 @@ This project builds AWS infrastructure for deploying a containerized web applica
 - **Registry**: Amazon ECR for Docker images
 - **Region**: ap-southeast-3 (Jakarta)
 - **Networking**: VPC with 3 AZs, public subnets (private subnets planned for later)
-- **Load Balancing**: Shared internet-facing ALB with per-app listener rules (default 404)
+- **Load Balancing**: Out of scope for now. Each app gets a target group that the ASG attaches to; the TG's own health check drives self-healing, but no ALB is provisioned. Clients reach instances directly on their public IPs (`app_port_allowed_cidrs` on the per-app SG, default `0.0.0.0/0`).
 - **Scaling**: Autoscaling Group (no dynamic scaling policies configured yet)
 - **Consistency**: SSM Parameter Store is the single source of truth; instances read image tag and env vars at boot time
-- **Multi-App Support**: Two reusable Terraform modules — `shared-infra` (VPC + ALB + ALB SG) and `app` (ASG, target group, listener rule, IAM, SSM, SNS, app SG). Adding a new app = copy one Terragrunt unit file; no Terraform file duplication. The `app_name` variable namespaces SSM parameters (`/<project>/<env>/<app_name>/...`), per-app resource names (`<project>-<env>-<app_name>-*`), and the on-instance compose directory (`/home/ubuntu/<app_name>`).
+- **Multi-App Support**: Two reusable Terraform modules — `shared-infra` (VPC) and `app` (ASG, target group, IAM, SSM, SNS, app SG). Adding a new app = copy one Terragrunt unit file; no Terraform file duplication. The `app_name` variable namespaces SSM parameters (`/<project>/<env>/<app_name>/...`), per-app resource names (`<project>-<env>-<app_name>-*`), and the on-instance compose directory (`/home/ubuntu/<app_name>`).
 - **Container Runtime**: Each instance runs the app via `docker compose up -d` from `/home/ubuntu/<app_name>`. The user data script generates `docker-compose.yml` and `.env` from SSM at boot.
 
 ## Terraform Modules
@@ -25,8 +25,8 @@ This project builds AWS infrastructure for deploying a containerized web applica
 
 | Module | Purpose |
 |--------|---------|
-| `shared-infra` | VPC, ALB, ALB security group. One instance per environment. |
-| `app` | ASG, target group + listener rule on the shared ALB, IAM role/policies, SSM parameters (image tag + SecureString env vars), SNS alert topic, app SG. One instance per application. |
+| `shared-infra` | VPC. One instance per environment. |
+| `app` | ASG, target group (attached to the ASG but not fronted by an ALB), IAM role/policies, SSM parameters (image tag + SecureString env vars), SNS alert topic, app SG. One instance per application. |
 
 ### Registry modules used
 
@@ -34,7 +34,6 @@ This project builds AWS infrastructure for deploying a containerized web applica
 |--------|---------|
 | `terraform-aws-modules/vpc/aws` | 6.6.1 |
 | `terraform-aws-modules/autoscaling/aws` | 9.2.0 |
-| `terraform-aws-modules/alb/aws` | 10.5.0 |
 
 ## Project Structure
 
@@ -43,7 +42,7 @@ This project builds AWS infrastructure for deploying a containerized web applica
 ├── packer/                          # Packer template + provisioning scripts for the AMI
 ├── terraform/
 │   └── modules/
-│       ├── shared-infra/            # VPC, ALB, ALB SG
+│       ├── shared-infra/            # VPC
 │       └── app/                     # ASG, target group, IAM, SSM, SNS, app SG
 │           └── templates/
 │               └── user-data.sh.tftpl
@@ -69,14 +68,12 @@ This project builds AWS infrastructure for deploying a containerized web applica
 
 ## Adding a New App
 
-Full operator runbook in [docs/adding-a-new-app.md](docs/adding-a-new-app.md). Short version: no Terraform code needs to change. Pick an `app_name` (e.g., `admin`) and a unique `listener_rule_priority`, then:
+Full operator runbook in [docs/adding-a-new-app.md](docs/adding-a-new-app.md). Short version: no Terraform code needs to change. Pick an `app_name` (e.g., `admin`), then:
 
 1. `cp -r terragrunt/production/apps/web terragrunt/production/apps/<new_app>`
 2. Edit `terragrunt/production/apps/<new_app>/terragrunt.hcl`:
    - Change `app_name = "<new_app>"`
-   - Set a unique `listener_rule_priority` (not already used by another app in this environment; lower numbers are evaluated first)
-   - Set `listener_rule_path_patterns` if the app is path-routed (defaults to `["/*"]`)
-   - Update `ami_id`, `docker_image_repo`, `app_env_vars`, and any ASG sizing inputs as needed
+   - Update `ami_id`, `docker_image_repo`, `app_env_vars`, `app_port` / `health_check_path`, and any ASG sizing inputs as needed
 3. `terragrunt run --working-dir terragrunt/production/apps/<new_app> -- plan`
 4. `terragrunt run --working-dir terragrunt/production/apps/<new_app> -- apply` (after explicit user approval)
 

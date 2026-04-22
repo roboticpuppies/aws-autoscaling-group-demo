@@ -16,13 +16,15 @@ resource "aws_security_group" "ec2" {
   }
 }
 
-resource "aws_vpc_security_group_ingress_rule" "ec2_app_from_alb" {
-  security_group_id            = aws_security_group.ec2.id
-  description                  = "App port from ALB"
-  from_port                    = var.app_port
-  to_port                      = var.app_port
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = var.alb_security_group_id
+resource "aws_vpc_security_group_ingress_rule" "ec2_app" {
+  for_each = toset(var.app_port_allowed_cidrs)
+
+  security_group_id = aws_security_group.ec2.id
+  description       = "App port from ${each.value}"
+  from_port         = var.app_port
+  to_port           = var.app_port
+  ip_protocol       = "tcp"
+  cidr_ipv4         = each.value
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ec2_ssh" {

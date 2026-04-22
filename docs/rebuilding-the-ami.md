@@ -96,8 +96,8 @@ Expected diff per app:
 - `aws_autoscaling_group` — `launch_template.version` bumps to the new version.
 
 Expected **not** to change:
-- Any shared-infra resource (VPC, ALB, listener).
-- Target groups, listener rules, IAM roles, SSM params, SNS topics, security groups.
+- Any shared-infra resource (VPC).
+- Target groups, IAM roles, SSM params, SNS topics, security groups.
 
 Anything else showing a diff = stop and investigate. You probably picked up an unrelated drift.
 
@@ -141,10 +141,13 @@ Wait for `Successful`. See [autoscaling-behavior.md](autoscaling-behavior.md#ins
 
 ## Step 6 — Verify
 
-- App still responds on the ALB:
+- App still responds on an instance's public IP (no ALB in this project yet):
   ```bash
-  ALB_DNS=$(terragrunt run --working-dir terragrunt/production/shared-infra -- output -raw alb_dns_name)
-  curl -i "http://$ALB_DNS/"
+  INSTANCE_IP=$(aws ec2 describe-instances \
+    --filters "Name=tag:aws:autoscaling:groupName,Values=myproject-production-web-asg" \
+              "Name=instance-state-name,Values=running" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+  curl -i "http://$INSTANCE_IP:8080/health"
   ```
 - Instances report the new AMI:
   ```bash
@@ -196,7 +199,7 @@ Keep at least one prior AMI for rollback.
 | `terragrunt plan` shows more than just `image_id` / launch-template-version | Unrelated drift or stale state | Stop. Inspect the extra changes before applying |
 | Instance refresh stuck at `InProgress` for >15min | New AMI boots but user-data fails before `CONTINUE` | Check `/var/log/user-data.log` on a failing instance; SNS alert email; see [adding-a-new-app.md](adding-a-new-app.md#step-5--verify) |
 | `Failed` instance refresh | ABANDON triggered by user-data or health check | ASG stops refresh, remaining instances still on old AMI. Diagnose before retrying |
-| New instances pass ALB health but app misbehaves | AMI change introduced a subtle runtime regression (Docker version, kernel, etc.) | Rollback (above). File a bug against the Packer scripts |
+| New instances pass target-group health but app misbehaves | AMI change introduced a subtle runtime regression (Docker version, kernel, etc.) | Rollback (above). File a bug against the Packer scripts |
 | Can't find the AMI after `packer build` finishes | Region mismatch between Packer and AWS CLI | `aws ec2 describe-images --region <region>` where `<region>` matches `var.aws_region` |
 
 ---

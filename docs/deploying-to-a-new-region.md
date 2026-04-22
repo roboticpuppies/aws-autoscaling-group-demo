@@ -165,14 +165,21 @@ Shared-infra finishes in 2–3 minutes. Each app unit takes 3–5 minutes for AS
 
 ## Step 9 — Verify
 
+No ALB is provisioned — hit an instance directly on its public IP:
+
 ```bash
-ALB_DNS=$(terragrunt run --working-dir terragrunt/production/shared-infra -- output -raw alb_dns_name)
-curl -i "http://$ALB_DNS/"
+INSTANCE_IP=$(aws ec2 describe-instances \
+  --filters "Name=tag:aws:autoscaling:groupName,Values=myproject-production-web-asg" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' --output text \
+  --region eu-west-1)
+
+curl -i "http://$INSTANCE_IP:8080/health"
 ```
 
-Expect `HTTP/1.1 200 OK` from your app. `404` from the ALB = listener rule didn't match. Connection hang / 5xx = container not healthy yet or still bootstrapping.
+Expect `HTTP/1.1 200 OK` from your app. Connection hang / refused = container not healthy yet or SG doesn't allow your source IP.
 
-Deeper verification (ASG capacity, listener rules, target-group health, user-data logs): see [adding-a-new-app.md](adding-a-new-app.md#step-5--verify).
+Deeper verification (ASG capacity, target-group health, user-data logs): see [adding-a-new-app.md](adding-a-new-app.md#step-5--verify).
 
 ---
 
@@ -185,7 +192,7 @@ Deeper verification (ASG capacity, listener rules, target-group health, user-dat
 | ASG launches instances that fail to reach InService | vCPU quota too low in new region | Service Quotas → EC2 → Running On-Demand Standard → request increase |
 | `terragrunt apply` fails: AMI not found | AMI was built in a different region | Rebuild with Packer in target region (Step 4) |
 | Instances launch but can't pull from ECR | ECR repo in wrong region, or URL mismatch | Verify `docker_image_repo` region segment matches `aws_region` in `root.hcl` |
-| First deploy: container starts, ALB target stays unhealthy | SSM `docker-image-tag` points at a tag that doesn't exist in ECR | Push the tag, or update the SSM param, then `start-instance-refresh` |
+| First deploy: container starts, target-group target stays unhealthy | SSM `docker-image-tag` points at a tag that doesn't exist in ECR | Push the tag, or update the SSM param, then `start-instance-refresh` |
 | Plan shows VPC peering errors | `vpc_cidr` clashes with an existing VPC | Change `vpc_cidr` in `env.hcl` |
 
 ---

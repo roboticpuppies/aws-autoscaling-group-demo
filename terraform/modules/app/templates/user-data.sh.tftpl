@@ -226,8 +226,8 @@ echo "docker-compose.yml generated at $APP_DIR/docker-compose.yml"
 # -----------------------------------------------------------------------------
 # Ensure the Docker daemon is up (it should be, since systemd enables it at
 # boot via the AMI), then pull the image and start the container detached.
-# Once the app starts responding to /health, the ALB target group health check
-# will mark this instance healthy and route traffic to it.
+# Once the app starts responding to /health, the target group health check
+# will mark this instance healthy so the ASG stops considering it unhealthy.
 # =============================================================================
 
 systemctl start docker
@@ -244,10 +244,10 @@ echo "=== Container started at $(date) ==="
 # -----------------------------------------------------------------------------
 # The instance has been held in Pending:Wait since launch and is NOT yet
 # attached to the target group. CONTINUE tells the ASG to proceed: the
-# traffic_source_attachments config then attaches the instance, and the ALB
-# health check takes over as the steady-state liveness signal. If this call
-# fails, the ERR trap fires and sends ABANDON instead so we don't leave the
-# instance stuck until the heartbeat expires.
+# traffic_source_attachments config then attaches the instance, and the target
+# group health check takes over as the steady-state liveness signal. If this
+# call fails, the ERR trap fires and sends ABANDON instead so we don't leave
+# the instance stuck until the heartbeat expires.
 # =============================================================================
 
 aws autoscaling complete-lifecycle-action \

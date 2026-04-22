@@ -58,6 +58,8 @@ module "asg" {
   # Hold new instances in Pending:Wait (not yet attached to the target group)
   # until user-data calls complete-lifecycle-action. If the heartbeat expires,
   # the instance is ABANDONed (terminated) instead of joining in a broken state.
+  # The target group exists without an ALB listener — attachment + health check
+  # still drive ASG self-healing even though no traffic is forwarded to it.
   initial_lifecycle_hooks = [
     {
       name                 = local.launch_lifecycle_hook_name

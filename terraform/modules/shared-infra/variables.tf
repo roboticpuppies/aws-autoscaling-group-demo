@@ -4,8 +4,6 @@
 # This module provisions infrastructure that is shared across every app deployed
 # into a given project/environment:
 #   - VPC (3 AZs, public subnets)
-#   - ALB (internet-facing, default 404 listener)
-#   - ALB security group
 #
 # Per-app resources (ASG, target group, IAM, SSM, SNS, app SG) live in the
 # `app` module.

@@ -2,15 +2,8 @@
 # Unit: production / apps / web
 # -----------------------------------------------------------------------------
 # One-app instance of the `app` module. Duplicate this directory to stand up
-# another app — change `app_name`, `listener_rule_priority`, and whatever
-# app-specific inputs differ, and you're done. No Terraform file duplication.
-#
-# Listener-rule priority discipline:
-#   Each app in a given environment MUST pick a unique `listener_rule_priority`
-#   between 1 and 50000. Lower numbers are evaluated first. Conventionally we
-#   reserve:
-#     100   default catch-all app
-#     200+  apps with specific path patterns (admin, api, ...)
+# another app — change `app_name` and whatever app-specific inputs differ, and
+# you're done. No Terraform file duplication.
 # =============================================================================
 
 include "root" {
@@ -33,11 +26,9 @@ dependency "shared_infra" {
   # applied (e.g., for validation in CI).
   mock_outputs_allowed_terraform_commands = ["validate", "plan", "init"]
   mock_outputs = {
-    vpc_id                = "vpc-00000000000000000"
-    vpc_cidr              = "10.0.0.0/16"
-    public_subnet_ids     = ["subnet-0000000000000000a", "subnet-0000000000000000b", "subnet-0000000000000000c"]
-    alb_listener_http_arn = "arn:aws:elasticloadbalancing:ap-southeast-3:000000000000:listener/app/mock/mock/mock"
-    alb_security_group_id = "sg-00000000000000000"
+    vpc_id            = "vpc-00000000000000000"
+    vpc_cidr          = "10.0.0.0/16"
+    public_subnet_ids = ["subnet-0000000000000000a", "subnet-0000000000000000b", "subnet-0000000000000000c"]
   }
 }
 
@@ -52,24 +43,17 @@ inputs = merge(
     # -------------------------------------------------------------------------
     # Wiring from shared-infra
     # -------------------------------------------------------------------------
-    vpc_id                = dependency.shared_infra.outputs.vpc_id
-    vpc_cidr              = dependency.shared_infra.outputs.vpc_cidr
-    public_subnet_ids     = dependency.shared_infra.outputs.public_subnet_ids
-    alb_listener_arn      = dependency.shared_infra.outputs.alb_listener_http_arn
-    alb_security_group_id = dependency.shared_infra.outputs.alb_security_group_id
-
-    # -------------------------------------------------------------------------
-    # ALB listener rule (unique per app in the environment)
-    # -------------------------------------------------------------------------
-    listener_rule_priority      = 100
-    listener_rule_path_patterns = ["/*"]
+    vpc_id            = dependency.shared_infra.outputs.vpc_id
+    vpc_cidr          = dependency.shared_infra.outputs.vpc_cidr
+    public_subnet_ids = dependency.shared_infra.outputs.public_subnet_ids
 
     # -------------------------------------------------------------------------
     # Security / Networking
     # -------------------------------------------------------------------------
-    ssh_allowed_cidrs = []
-    app_port          = 8080
-    health_check_path = "/health"
+    ssh_allowed_cidrs      = []
+    app_port               = 8080
+    app_port_allowed_cidrs = ["0.0.0.0/0"]
+    health_check_path      = "/health"
 
     # -------------------------------------------------------------------------
     # EC2 / ASG

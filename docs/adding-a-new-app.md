@@ -6,7 +6,7 @@ No Terraform code changes needed. Copy one Terragrunt unit file, wire it up. Wal
 
 ## Prerequisites
 
-- [ ] `shared-infra` applied (VPC + ALB exist). Verify:
+- [ ] `shared-infra` applied (VPC exists). Verify:
   ```bash
   terragrunt run --working-dir terragrunt/production/shared-infra -- output
   ```
@@ -27,29 +27,8 @@ No Terraform code changes needed. Copy one Terragrunt unit file, wire it up. Wal
     --output table
   ```
   Need new AMI: `packer build packer/ubuntu-docker.pkr.hcl`.
-- [ ] **Unique `listener_rule_priority`** picked.
-- [ ] **Listener path patterns** known (`/*`, `/api/*`, etc.).
 - [ ] **Container port** + **health check path** known.
 - [ ] **Env var map** ready (become SSM `SecureString` params).
-
-### Listener-rule priority convention
-
-ALB evaluates rules lowest-first. Two apps can't share priority.
-
-| Priority range | Use |
-|---|---|
-| `100` | Default catch-all app (`/*`) — one per env |
-| `200–299` | Path-routed apps (`/api/*`, `/admin/*`) |
-| `300+` | Host-routed apps (different hostnames) |
-
-Check existing priorities:
-
-```bash
-aws elbv2 describe-rules \
-  --listener-arn "$(terragrunt run --working-dir terragrunt/production/shared-infra -- output -raw alb_listener_http_arn)" \
-  --query 'Rules[].[Priority, Conditions[0].Values[0]]' \
-  --output table
-```
 
 ---
 
@@ -70,10 +49,9 @@ Open `terragrunt/production/apps/api/terragrunt.hcl`. Set in `inputs` block:
 | Input | What to set | Notes |
 |---|---|---|
 | `app_name` | `"api"` | Namespaces all resources, SSM path, compose dir. |
-| `listener_rule_priority` | Unique integer, e.g., `200` | No collision with other apps. |
-| `listener_rule_path_patterns` | e.g., `["/api/*"]` | Defaults `["/*"]` — set if path-routed. |
 | `app_port` | e.g., `3000` | Container listen port. |
-| `health_check_path` | e.g., `/healthz` | ALB probes here; must return 200. |
+| `health_check_path` | e.g., `/healthz` | Target group probes here; must return 200. |
+| `app_port_allowed_cidrs` | e.g., `["203.0.113.0/24"]` | CIDRs allowed to reach `app_port` on the instance public IPs. Default `["0.0.0.0/0"]`. |
 | `ami_id` | Packer AMI ID | |
 | `instance_type` | e.g., `t3.medium` | |
 | `key_name` | SSH key pair name | `""` = no SSH key. |
@@ -98,13 +76,12 @@ Expected CREATE plan:
 - 1 IAM role + instance profile + 5 inline policies
 - 1 launch template
 - 1 ASG + launch lifecycle hook + instance refresh config
-- 1 ALB target group + 1 listener rule
+- 1 target group
 - 1 EC2 SG + ingress/egress rules
 - 1 SNS topic (+ optional email sub)
 - ~3+ SSM params (`docker-image-repo`, `docker-image-tag`, one per `app_env_vars` entry)
 
 Review:
-- Listener-rule priority correct + not already in use.
 - `ami_id` = correct Packer AMI.
 - `docker_image_repo` = ECR repo from prerequisites.
 - No `destroy` or `replace` on anything outside this app.
@@ -137,16 +114,6 @@ aws autoscaling describe-auto-scaling-groups \
 
 All 3 numbers match = good.
 
-### Listener rule attached
-
-```bash
-aws elbv2 describe-rules \
-  --listener-arn "$(terragrunt run --working-dir terragrunt/production/shared-infra -- output -raw alb_listener_http_arn)" \
-  --query 'Rules[?Priority==`"200"`]'
-```
-
-Replace `200` with your priority.
-
 ### Target group healthy
 
 ```bash
@@ -158,12 +125,18 @@ All targets `healthy`. If `unhealthy` = container not responding on `health_chec
 
 ### End-to-end smoke test
 
+No ALB is provisioned, so hit an instance directly on its public IP:
+
 ```bash
-ALB_DNS=$(terragrunt run --working-dir terragrunt/production/shared-infra -- output -raw alb_dns_name)
-curl -i "http://$ALB_DNS/api/healthz"
+INSTANCE_IP=$(aws ec2 describe-instances \
+  --filters "Name=tag:aws:autoscaling:groupName,Values=myproject-production-api-asg" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+
+curl -i "http://$INSTANCE_IP:3000/healthz"   # swap port + path for your app
 ```
 
-Expect `HTTP/1.1 200 OK`. Getting ALB's default `404 Not Found` = listener rule didn't match.
+Expect `HTTP/1.1 200 OK`. Connection refused / timeout = the SG doesn't allow your source IP, or the container isn't up yet.
 
 ### user-data log (if broken)
 
@@ -217,7 +190,7 @@ terragrunt run --working-dir terragrunt/production/apps/api -- destroy
 rm -rf terragrunt/production/apps/api
 ```
 
-Confirm destroy plan first — should delete only per-app resources (ASG, target group, listener rule, IAM role, SSM params, SNS topic, EC2 SG). shared-infra untouched.
+Confirm destroy plan first — should delete only per-app resources (ASG, target group, IAM role, SSM params, SNS topic, EC2 SG). shared-infra untouched.
 
 ECR repo + S3 state object remain. Clean up if app gone for good:
 
@@ -233,10 +206,9 @@ aws s3 rm "s3://myproject-terraform-state/production/apps/api/terraform.tfstate"
 
 | Symptom | Likely cause | Where to look |
 |---|---|---|
-| `terragrunt apply` fails "rule priority already in use" | Another app has same `listener_rule_priority` | `aws elbv2 describe-rules` (see Prerequisites) |
 | Instances launch then ABANDON | user-data failed before `CONTINUE` | `/var/log/user-data.log`; SNS alert email |
 | Target group stays `unhealthy` | Container not responding on `health_check_path:app_port` | `docker compose logs` in `/home/ubuntu/api` |
-| ALB returns 404 to test traffic | Path pattern doesn't match request | `aws elbv2 describe-rules`, compare `Conditions` |
+| `curl` to instance IP times out | `app_port_allowed_cidrs` doesn't include your source IP | `terragrunt.hcl` input, or `aws ec2 describe-security-groups` |
 | First apply can't pull from ECR | Instance role lacks permission, or ECR repo missing | `app/iam.tf` grants `ecr:*Pull*`; check ECR repo exists |
 | SSM param not readable | `app_name` mismatch → instance reads wrong SSM path | Verify `/<project>/<env>/<app_name>/...` vs. user-data |
 

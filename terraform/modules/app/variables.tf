@@ -1,9 +1,9 @@
 # =============================================================================
 # App Module: Inputs
 # -----------------------------------------------------------------------------
-# Everything needed to deploy one app (ASG, target group + listener rule, IAM,
-# SSM, SNS, app SG) onto the shared VPC + ALB. Shared-infra outputs flow in via
-# the *_from_shared variables.
+# Everything needed to deploy one app (ASG, target group, IAM, SSM, SNS,
+# app SG) onto the shared VPC. Shared-infra outputs flow in via the `vpc_*`
+# and `public_subnet_ids` variables.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -50,16 +50,6 @@ variable "public_subnet_ids" {
   type        = list(string)
 }
 
-variable "alb_listener_arn" {
-  description = "Shared ALB HTTP listener ARN from shared-infra. The per-app listener rule attaches here."
-  type        = string
-}
-
-variable "alb_security_group_id" {
-  description = "Shared ALB security group ID from shared-infra. Referenced by the EC2 SG ingress rule."
-  type        = string
-}
-
 # -----------------------------------------------------------------------------
 # Security / Networking
 # -----------------------------------------------------------------------------
@@ -76,25 +66,16 @@ variable "app_port" {
   default     = 8080
 }
 
+variable "app_port_allowed_cidrs" {
+  description = "CIDR blocks allowed to reach instances on `app_port`. Without an ALB, this is how operators or clients hit the app directly on each instance's public IP. Defaults to open internet for demo convenience."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
 variable "health_check_path" {
-  description = "HTTP path for ALB health checks."
+  description = "HTTP path the target group uses for health checks."
   type        = string
   default     = "/health"
-}
-
-# -----------------------------------------------------------------------------
-# ALB listener rule
-# -----------------------------------------------------------------------------
-
-variable "listener_rule_priority" {
-  description = "Priority of the per-app listener rule on the shared ALB. Must be unique across all apps in the environment."
-  type        = number
-}
-
-variable "listener_rule_path_patterns" {
-  description = "Path patterns that route to this app. Defaults to catch-all."
-  type        = list(string)
-  default     = ["/*"]
 }
 
 # -----------------------------------------------------------------------------
