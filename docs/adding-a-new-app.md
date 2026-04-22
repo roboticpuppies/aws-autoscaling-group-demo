@@ -223,7 +223,8 @@ ECR repo + S3 state object remain. Clean up if app gone for good:
 
 ```bash
 aws ecr delete-repository --repository-name api --force
-aws s3 rm "s3://$TG_STATE_BUCKET/production/apps/api/terraform.tfstate"
+# State bucket is the `state_bucket` local in terragrunt/root.hcl (default: myproject-terraform-state)
+aws s3 rm "s3://myproject-terraform-state/production/apps/api/terraform.tfstate"
 ```
 
 ---

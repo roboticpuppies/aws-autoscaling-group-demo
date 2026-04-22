@@ -97,7 +97,7 @@ terragrunt run --all --working-dir terragrunt/production -- plan
 terragrunt run --all --working-dir terragrunt/production -- apply
 ```
 
-Remote state is configured in `terragrunt/root.hcl`. Each unit gets its own S3 key via `path_relative_to_include()` (e.g., `production/shared-infra/terraform.tfstate`, `production/apps/web/terraform.tfstate`). Set `TG_STATE_BUCKET` and `TG_STATE_REGION` env vars to override the defaults, or edit the `locals` block in `root.hcl`.
+Remote state is configured in `terragrunt/root.hcl`. Each unit gets its own S3 key via `path_relative_to_include()` (e.g., `production/shared-infra/terraform.tfstate`, `production/apps/web/terraform.tfstate`). To retarget at a different state bucket or region, edit the `locals` block at the top of `root.hcl` (`state_bucket`, `state_region`). Multi-region deployments are expected to use a separate state bucket per region.
 
 ## CI/CD Deployment Flow (No Terraform/Terragrunt Required)
 

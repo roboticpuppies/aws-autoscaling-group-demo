@@ -41,7 +41,9 @@ locals {
 # Remote state: S3 + native DynamoDB-free locking (S3 conditional writes in
 # AWS provider v6 + Terraform 1.14 support use_lockfile-style state locking).
 # Each unit gets its own key derived from its path relative to this file so
-# state files never collide.
+# state files never collide. Multi-region deployments are expected to use a
+# separate state bucket per region (set `state_bucket` and `state_region`
+# above when retargeting), which is why the key itself is region-agnostic.
 # -----------------------------------------------------------------------------
 remote_state {
   backend = "s3"
