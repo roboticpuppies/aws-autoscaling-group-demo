@@ -1,7 +1,7 @@
 # The Packer AMI
 
 The AMI bakes in Docker Engine, AWS CLI v2, `stress-ng`, and a pre-pulled
-`nginx:alpine` image. Baking them avoids package installation at boot. The
+`stefanprodan/podinfo:6.14.1` image. Baking them avoids package installation at boot. The
 pre-pulled image makes user-data's `docker pull` a cache hit, so scale-out is
 fast in front of an audience and does not depend on venue network speed.
 
@@ -30,7 +30,7 @@ the `name_prefix` and which carries `Project=Demo`. Changing the Packer
 
 The provisioner asserts `docker --version`, `stress-ng --version`, and
 `aws --version`. It hard-fails unless the AWS CLI reports `aws-cli/2`, and it
-confirms that `nginx:alpine` is in the local Docker image cache. A successful
+confirms that `stefanprodan/podinfo:6.14.1` is in the local Docker image cache. A successful
 build has therefore already proved that these ingredients landed in the AMI.
 
 The one uncertainty is the `awscli-2` dnf package name. The script tolerates

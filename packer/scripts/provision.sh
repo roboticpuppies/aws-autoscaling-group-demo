@@ -25,8 +25,8 @@ systemctl enable --now docker
 
 # Pre-pull the web server image so user-data's docker pull is a cache hit and
 # scale-out is fast in front of an audience.
-log "pre-pulling nginx:alpine"
-docker pull nginx:alpine
+log "pre-pulling stefanprodan/podinfo:6.14.1"
+docker pull stefanprodan/podinfo:6.14.1
 
 log "asserting the AMI contains what the demo needs"
 docker --version
@@ -40,7 +40,7 @@ if ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
   exit 1
 fi
 
-log "verifying nginx:alpine is in the local image cache"
-docker image inspect nginx:alpine >/dev/null
+log "verifying stefanprodan/podinfo:6.14.1 is in the local image cache"
+docker image inspect stefanprodan/podinfo:6.14.1 >/dev/null
 
 log "done"

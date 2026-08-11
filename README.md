@@ -17,7 +17,7 @@ Everything is destroyed after the talk. Total running cost is cents per hour.
 
 - **Region:** `ap-southeast-1` (Singapore)
 - **Tooling:** Terraform (infrastructure), Packer (AMI), Make (commands)
-- **Workload:** nginx in Docker, serving a page that names the instance serving it
+- **Workload:** [podinfo](https://github.com/stefanprodan/podinfo) in Docker, reporting the instance serving it via its hostname
 
 Jakarta (`ap-southeast-3`) would have been closer, but AWS FIS does not exist there — so the Spot-interruption demo, which is half the point, is impossible in that Region. Singapore is the nearest Region that has it.
 
@@ -50,7 +50,7 @@ Left out on purpose, to keep the stack legible and cheap:
         ┌───────────────┼───────────────┐
    ┌────▼────┐     ┌────▼────┐     ┌────▼────┐
    │  AZ a   │     │  AZ b   │     │  AZ c   │
-   │ nginx   │     │ nginx   │     │ nginx   │   docker, from Packer AMI
+   │ podinfo │     │ podinfo │     │ podinfo │   docker, from Packer AMI
    └─────────┘     └─────────┘     └─────────┘
         └───────────────┴───────────────┘
                   ASG: min 1 / desired 3 / max 5
@@ -75,8 +75,8 @@ Left out on purpose, to keep the stack legible and cheap:
 2. A **launch lifecycle hook** holds it in `Pending:Wait`. It is not in service, and the ALB sends it nothing.
 3. User-data reads the instance's own ID, AZ, type, and whether it is Spot or On-Demand from instance metadata.
 4. **The instance names itself** `asg-demo-4f7a2` — the ASG name plus the last five characters of its own instance ID, deliberately echoing the way Kubernetes names pods. It writes that as its own `Name` tag. Instances are then identifiable at a glance instead of being a wall of blank rows in the console.
-5. User-data writes the name and metadata into an HTML file and starts nginx in Docker serving it.
-6. User-data polls its own port 80 until nginx answers, then calls `complete-lifecycle-action` to release the hook.
+5. User-data starts podinfo in Docker, with the container's hostname set to the instance's name so it shows up in podinfo's own runtime-info response.
+6. User-data polls its own port 80 until podinfo answers, then calls `complete-lifecycle-action` to release the hook.
 7. The instance goes `InService`, passes ALB health checks, and starts taking traffic.
 
 The point: an instance joins the load balancer when the *application* is ready, not when the *EC2 instance* has booted. If bootstrap fails, a failure handler in the script completes the hook as `ABANDON` straight away and the instance is replaced, rather than joining half-built or sitting idle until the hook times out.

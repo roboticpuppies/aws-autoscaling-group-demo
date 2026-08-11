@@ -43,7 +43,7 @@ chosen by the launch template.
 ## Beat 2 — keep the poll window visible
 
 Start `make poll` in a second terminal and leave it running for the rest of the
-demo. It curls `/name.txt` once per second and is the single most useful window
+demo. It curls `/env` once per second and is the single most useful window
 on screen: it shows which instance and Availability Zone served each request.
 
 ## Beat 3 — scale-out

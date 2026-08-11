@@ -17,10 +17,10 @@ User-data performs this sequence:
 1. Read instance identity and lifecycle metadata through IMDSv2.
 2. Derive the instance name from the ASG name and the last five characters of
    the instance ID, then tag itself.
-3. Write `/opt/demo/html/index.html` and the machine-readable `name.txt` file.
-4. Start nginx in Docker.
-5. Poll port 80 until nginx answers.
-6. Run `complete-lifecycle-action` with
+3. Start podinfo in Docker, with the container hostname set to the instance
+   name so it appears in podinfo's own runtime-info response.
+4. Poll port 80 until podinfo answers.
+5. Run `complete-lifecycle-action` with
    `--lifecycle-action-result CONTINUE`.
 
 The point is that an instance joins the load balancer when the application is
@@ -37,7 +37,7 @@ in the launch wait state.
 Both are `initial_lifecycle_hook` blocks inside `aws_autoscaling_group`. A
 separate `aws_autoscaling_lifecycle_hook` resource is created after the ASG, so
 the first instances could launch before the hook existed and reach `InService`
-without waiting for nginx. That defeats the hook exactly once, on the first
+without waiting for podinfo. That defeats the hook exactly once, on the first
 apply, which is the hardest case to notice.
 
 ## Why the terminate hook is a plain wait

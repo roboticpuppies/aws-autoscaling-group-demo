@@ -8,7 +8,7 @@ resource "aws_autoscaling_group" "demo" {
 
   # "ELB" covers both: it adds ALB health checks on top of EC2 status checks.
   # There is no separate EC2 toggle. The grace period only starts once an
-  # instance reaches InService -- which the launch hook already gates on nginx
+  # instance reaches InService -- which the launch hook already gates on podinfo
   # answering -- so it is headroom against a container dying just after
   # bootstrap, not cover for boot time.
   health_check_type         = "ELB"
@@ -59,7 +59,7 @@ resource "aws_autoscaling_group" "demo" {
   # Declared here rather than as separate aws_autoscaling_lifecycle_hook
   # resources on purpose. A separate resource is created after the ASG, so the
   # first instances would launch before the launch hook existed and reach
-  # InService without waiting for nginx -- defeating the hook exactly once, on
+  # InService without waiting for podinfo -- defeating the hook exactly once, on
   # the first apply, which is the hardest case to notice.
   initial_lifecycle_hook {
     name                 = local.launch_hook_name

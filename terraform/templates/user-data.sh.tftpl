@@ -109,7 +109,7 @@ log "this instance is $INSTANCE_NAME ($INSTANCE_TYPE, $LIFECYCLE, $AZ)"
 # --- Self-naming -------------------------------------------------------------
 
 # Cosmetic, and deliberately non-fatal: `|| log` keeps a failure here from
-# tripping the ERR trap and abandoning an otherwise healthy instance. Only nginx
+# tripping the ERR trap and abandoning an otherwise healthy instance. Only podinfo
 # failing to answer is worth abandoning over.
 log "tagging self as $INSTANCE_NAME"
 aws ec2 create-tags \
@@ -117,46 +117,29 @@ aws ec2 create-tags \
   --tags Key=Name,Value="$INSTANCE_NAME" \
   || log "WARN: self-tagging failed, continuing -- the Name tag is cosmetic"
 
-# --- Content -----------------------------------------------------------------
-
-log "writing the document root"
-mkdir -p /opt/demo/html
-
-# One machine-readable line, curled by `make poll`. Keep this format stable.
-printf '%s %s %s\n' "$INSTANCE_NAME" "$LIFECYCLE" "$AZ" > /opt/demo/html/name.txt
-
-cat > /opt/demo/html/index.html <<HTML
-<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><title>$INSTANCE_NAME</title></head>
-<body style="font-family: system-ui, sans-serif; font-size: 1.5rem; padding: 2rem">
-  <h1>$INSTANCE_NAME</h1>
-  <p>instance-id: $INSTANCE_ID</p>
-  <p>instance-type: $INSTANCE_TYPE</p>
-  <p>availability-zone: $AZ</p>
-  <p>purchase-option: <strong>$LIFECYCLE</strong></p>
-</body>
-</html>
-HTML
-
 # --- Web server --------------------------------------------------------------
 
 # Cache hit: the AMI already carries this image, so scale-out is fast on stage.
-log "starting nginx"
-docker pull nginx:alpine
-docker run -d --name web -p 80:80 \
-  -v /opt/demo/html:/usr/share/nginx/html:ro \
-  nginx:alpine
+# podinfo doesn't serve arbitrary static files, so the instance identity goes
+# in as env vars instead of an HTML file. `make poll` reads them back from
+# podinfo's own /env endpoint.
+log "starting podinfo"
+docker pull stefanprodan/podinfo:6.14.1
+docker run -d --name web -p 80:9898 \
+  -e INSTANCE_NAME="$INSTANCE_NAME" \
+  -e LIFECYCLE="$LIFECYCLE" \
+  -e AZ="$AZ" \
+  stefanprodan/podinfo:6.14.1
 
-log "waiting for nginx to answer on port 80"
+log "waiting for podinfo to answer on port 80"
 for attempt in $(seq 1 30); do
-  if curl -fs -o /dev/null http://localhost:80/; then
-    log "nginx is answering after $attempt attempt(s)"
+  if curl -fs -o /dev/null http://localhost:80/healthz; then
+    log "podinfo is answering after $attempt attempt(s)"
     break
   fi
 
   if [ "$attempt" -eq 30 ]; then
-    log "nginx did not answer after 30 attempts"
+    log "podinfo did not answer after 30 attempts"
     # Trips the ERR trap, which ABANDONs this instance.
     false
   fi

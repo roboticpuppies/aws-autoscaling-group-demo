@@ -36,7 +36,7 @@ resource "aws_iam_role_policy_attachment" "instance_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Lets user-data release the launch lifecycle hook once nginx answers.
+# Lets user-data release the launch lifecycle hook once podinfo answers.
 data "aws_iam_policy_document" "instance_lifecycle" {
   statement {
     sid    = "CompleteOwnLifecycleAction"

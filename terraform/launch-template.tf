@@ -23,7 +23,7 @@ data "aws_ami" "demo" {
 
 resource "aws_launch_template" "demo" {
   name        = var.name_prefix
-  description = "Demo instances: nginx in Docker on a Packer-built AL2023 arm64 AMI"
+  description = "Demo instances: podinfo in Docker on a Packer-built AL2023 arm64 AMI"
 
   image_id = data.aws_ami.demo.id
 

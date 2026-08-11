@@ -70,10 +70,11 @@ url: ## Print the ALB URL
 	@echo "$(ALB_URL)"
 
 poll: ## curl the ALB every second, printing which instance served (Ctrl-C to stop)
-	@echo "polling $(ALB_URL)/name.txt -- Ctrl-C to stop"
+	@echo "polling $(ALB_URL)/env -- Ctrl-C to stop"
 	@while true; do \
 	  printf '%s  ' "$$(date -u +%H:%M:%S)"; \
-	  curl -s --max-time 3 "$(ALB_URL)/name.txt" || echo "REQUEST FAILED"; \
+	  curl -s --max-time 3 "$(ALB_URL)/env" | grep -o '"\(INSTANCE_NAME\|LIFECYCLE\|AZ\)=[^"]*"' | tr '\n' ' ' || echo "REQUEST FAILED"; \
+	  echo; \
 	  sleep 1; \
 	done
 
